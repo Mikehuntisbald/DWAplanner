@@ -5,7 +5,7 @@
 #include <base_local_planner/odometry_helper_ros.h>
 #include <ros/console.h>
 #include <nav_msgs/Path.h>
-#include <tf2/utils.h>
+//#include <tf2/utils.h>
 //#include <nav_core/parameter_magic.h>
 
 #include <pluginlib/class_list_macros.h>
@@ -36,7 +36,7 @@ namespace my_local_planner {
         acc_lim_theta = 3.2;
         acc_lim_trans;
         prune_plan = true ;
-        xy_goal_tolerance = 0.3;
+        xy_goal_tolerance = 0.1;
         yaw_goal_tolerance = 0.17;
         trans_stopped_vel;
         theta_stopped_vel;
@@ -90,8 +90,25 @@ namespace my_local_planner {
             return false;
         }
         ROS_INFO("Got new plan");
+//        for(auto it : plan){
+//            ROS_INFO("%f,%f",it.pose.position.x,it.pose.position.y);
+//        }
         global_plan_.clear();
-        global_plan_ = plan;
+        for(auto it : plan){
+            geometry_msgs::PoseStamped pose;
+            pose.header.stamp = it.header.stamp;
+            pose.header.frame_id = it.header.frame_id;
+            pose.pose.position.x = it.pose.position.x;
+            pose.pose.position.y = it.pose.position.y;
+            pose.pose.position.z = 0.0;
+
+            pose.pose.orientation.x = 0.0;
+            pose.pose.orientation.y = 0.0;
+            pose.pose.orientation.z = 0.0;
+            pose.pose.orientation.w = 1.0;
+            global_plan_.push_back(pose);
+        }
+        //global_plan_ = plan;
         return true;
     }
 
@@ -117,11 +134,12 @@ namespace my_local_planner {
         geometry_msgs::PoseStamped gp;
 
         if (!getGoalPose(*tf_,
-                         global_plan_,
+                         *transformed_plan_,
                          global_frame_,
                          gp)) {
             return false;
         }
+        //ROS_INFO("goalpose %f,%f",gp.pose.position.x,gp.pose.position.y);
         //Got current_pose_ transformed_plan_(pruned plan less than 1.6*1.6)
         if (!rotate(current_pose_,gp,cmd_vel)) {
             bool isOk = dwaComputeVelocityCommands(transformed_plan, *costmap, current_pose_, cmd_vel);

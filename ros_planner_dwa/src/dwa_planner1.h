@@ -30,7 +30,7 @@
 #include <queue>
 
 #include <sensor_msgs/PointCloud2.h>
-#include <sensor_msgs/point_cloud2_iterator.h>*/
+#include <sensor_msgs/point_cloud2_rr.h>*/
 
 namespace my_local_planner{
     class ROSDWAplanner : public nav_core::BaseLocalPlanner{
@@ -54,7 +54,7 @@ namespace my_local_planner{
         double theta_stopped_vel;
         bool restore_defaults;
         tf2_ros::Buffer* tf_; ///< @brief Used for transforming point clouds
-
+        std::vector<geometry_msgs::PoseStamped>* transformed_plan_;
         bool initialized_;
 
         costmap_2d::Costmap2DROS* costmap_ros_;
@@ -150,44 +150,6 @@ namespace my_local_planner{
             }
             return true;
         }
-
-        bool getGoalPoseLocal(const tf2_ros::Buffer& tf,
-                         const std::vector<geometry_msgs::PoseStamped>& global_plan,
-                              costmap_2d::Costmap2DROS* costmap_ros, geometry_msgs::PoseStamped &goal_pose) {
-            //we assume the global goal is the last point in the global plan
-            if (global_plan.empty())
-            {
-                ROS_ERROR("Received plan with zero length");
-                return false;
-            }
-            std::string base_frame=costmap_ros->getBaseFrameID();
-            const geometry_msgs::PoseStamped& plan_goal_pose = global_plan.back();
-            try{
-                geometry_msgs::TransformStamped transform = tf.lookupTransform(base_frame, ros::Time(),
-                                                                               plan_goal_pose.header.frame_id, plan_goal_pose.header.stamp,
-                                                                               plan_goal_pose.header.frame_id, ros::Duration(0.5));
-                //point in source frame do what transformation into point in target frame
-                tf2::doTransform(plan_goal_pose, goal_pose, transform);
-                //goal_pose with frame_id of global_frame
-            }
-            catch(tf2::LookupException& ex) {
-                ROS_ERROR("No Transform available Error: %s\n", ex.what());
-                return false;
-            }
-            catch(tf2::ConnectivityException& ex) {
-                ROS_ERROR("Connectivity Error: %s\n", ex.what());
-                return false;
-            }
-            catch(tf2::ExtrapolationException& ex) {
-                ROS_ERROR("Extrapolation Error: %s\n", ex.what());
-                if (global_plan.size() > 0)
-                    ROS_ERROR("Global Frame: %s Plan Frame size %d: %s\n", "base_link", (unsigned int)global_plan.size(), global_plan[0].header.frame_id.c_str());
-
-                return false;
-            }
-            return true;
-        }
-
         bool GoalReached(base_local_planner::OdometryHelperRos& odom_helper,
                                          const geometry_msgs::PoseStamped& global_pose) {
 
@@ -225,21 +187,21 @@ namespace my_local_planner{
         }
 
         void prunePlan(const geometry_msgs::PoseStamped& global_pose, std::vector<geometry_msgs::PoseStamped>& plan, std::vector<geometry_msgs::PoseStamped>& global_plan){
-            ROS_ASSERT(global_plan.size() >= plan.size())
-            std::vector<geometry_msgs::PoseStamped>::iterator it = plan.end()-1;
-            std::vector<geometry_msgs::PoseStamped>::iterator global_it = global_plan.end()-1;
+            ROS_ASSERT(global_plan.size() >= plan.size());
+            auto it = plan.end()-1;
+            //auto global_it = global_plan.end()-1;
             while(it != plan.begin()){
                 const geometry_msgs::PoseStamped& w = *it;
                 // Fixed error bound of 2 meters for now. Can reduce to a portion of the map size or based on the resolution
                 double x_diff = global_pose.pose.position.x - w.pose.position.x;
                 double y_diff = global_pose.pose.position.y - w.pose.position.y;
                 double distance_sq = x_diff * x_diff + y_diff * y_diff;
-                if(distance_sq < 0.8){
+                if(distance_sq < 0.24){
                     ROS_DEBUG("Nearest waypoint to <%f, %f> is <%f, %f>\n", global_pose.pose.position.x, global_pose.pose.position.y, w.pose.position.x, w.pose.position.y);
                     break;
                 }
                 it = plan.erase(it);
-                global_it = global_plan.erase(global_it);
+                //global_it = global_plan.erase(global_it);
                 --it;
                 //beginning element?
             }
@@ -278,6 +240,7 @@ namespace my_local_planner{
             if(prune_plan) {
                 prunePlan(global_pose, transformed_plan, global_plan_);
                 publishLocalPlan(transformed_plan);
+                transformed_plan_ = &transformed_plan;
                 //ROS_INFO("Pruned");
             }
             return true;
@@ -291,7 +254,7 @@ namespace my_local_planner{
                 const std::string& global_frame,
                 std::vector<geometry_msgs::PoseStamped>& transformed_plan){
             transformed_plan.clear();
-
+            //turn whatever frame plan into global frame
             if (global_plan.empty()) {
                 ROS_ERROR("Received plan with zero length");
                 return false;
@@ -315,16 +278,16 @@ namespace my_local_planner{
                 double sq_dist_threshold = dist_threshold * dist_threshold;
                 double sq_dist = 0;
 
-                //we need to loop to a point on the plan that is within a certain distance of the robot
-                while(i < (unsigned int)global_plan.size()) {
-                    double x_diff = robot_pose.pose.position.x - global_plan[i].pose.position.x;
-                    double y_diff = robot_pose.pose.position.y - global_plan[i].pose.position.y;
-                    sq_dist = x_diff * x_diff + y_diff * y_diff;
-                    if (sq_dist <= sq_dist_threshold) {
-                        break;
-                    }
-                    ++i;
-                }
+                //we need to loop to a point on the plan that is within a certain distance of the robot useless
+//                while(i < (unsigned int)global_plan.size()) {
+//                    double x_diff = robot_pose.pose.position.x - global_plan[i].pose.position.x;
+//                    double y_diff = robot_pose.pose.position.y - global_plan[i].pose.position.y;
+//                    sq_dist = x_diff * x_diff + y_diff * y_diff;
+//                    if (sq_dist <= sq_dist_threshold) {
+//                        break;
+//                    }
+//                    ++i;
+//                }
 
                 geometry_msgs::PoseStamped newer_pose;
 
@@ -357,7 +320,7 @@ namespace my_local_planner{
 
                 return false;
             }
-            ROS_INFO("transforming GlobalPlan");
+            //ROS_INFO("transforming GlobalPlan");
             return true;
         }
         bool dwaComputeVelocityCommands(std::vector<geometry_msgs::PoseStamped>& transformed_plan, const costmap_2d::Costmap2D& costmap, geometry_msgs::PoseStamped &global_pose, geometry_msgs::Twist& cmd_vel) {
@@ -436,9 +399,9 @@ namespace my_local_planner{
                 }
             }
 
-            for (int i = 0; i < 11; ++i) {
+            /*for (int i = 0; i < 11; ++i) {
                 ROS_INFO("%f,%f",window[i].pose.position.x,tf2::getYaw(window[i].pose.orientation));
-            }
+            }*/
             //ROS_INFO("%f", );
             double dt = 0.01;
             std::vector<double>heading(121);
@@ -460,23 +423,34 @@ namespace my_local_planner{
                     T.pretranslate(Eigen::Vector3d(window[i].pose.position.x * dt, 0, 0));
                     Eigen::Isometry3d tmp = Eigen::Isometry3d::Identity();
 
+                    int min_dist=costmap.getSizeInCellsX();
                     //j is trajectory point. iteration are 11 times
                     for (int j = 0; j < trajectory[0].size(); j++) {
                         trajectory[i * 11 + o][j].pose.position.x = tmp.translation()[0];
                         trajectory[i * 11 + o][j].pose.position.y = tmp.translation()[1];
-
+                        trajectory[i * 11 + o][j].pose.position.z = 0;
                         Eigen::Matrix3d matrix = tmp.rotation();
                         Eigen::Vector3d vector = matrix.eulerAngles(2, 1, 0);
                         tf2::Quaternion q;
-                        //??
                         q.setRPY(0, 0, vector[0]);
                         tf2::convert(q, trajectory[i * 11 + o][j].pose.orientation);
+                        unsigned int x, y;
+                        costmap.worldToMap(trajectory[i * 11 + o][j].pose.position.x,trajectory[i * 11 + o][j].pose.position.y,x,y);
+                        for(int m=0;m<costmap.getSizeInCellsX();m++){
+                            for(int n=0;n<costmap.getSizeInCellsX();n++){
+                                if(costmap.getCost(m,n)>20 && hypot(x-m,y-n)<min_dist){
+                                    hypot(x-m,y-n)==0?min_dist = 1: min_dist = hypot(x-m,y-n);
+                                    //min_dist = hypot(x-m,y-n);
+                                }
+                            }
+                        }
+
                         //When acquiring the last trajectory point, get the heading angle
                         if(j==10){
                             //heading[i * 11 + o]=getGoalOrientationAngleDifference(trajectory[i * 11 + o][j], tf2::getYaw(transformed_plan.back().pose.orientation));
                             geometry_msgs::PoseStamped goal_pose;
                             if (!getGoalPose(*tf_,
-                                             global_plan_,
+                                             transformed_plan,
                                              global_frame_,
                                              goal_pose)) {
                                 return false;
@@ -490,23 +464,24 @@ namespace my_local_planner{
                             T1.rotate(mtr);
                             T1.pretranslate(Eigen::Vector3d(current_pose_.pose.position.x,current_pose_.pose.position.y , current_pose_.pose.position.z));
                             T1 = T1 * tmp;
+                            //predict
                             Eigen::Vector3d vec = T1.rotation().eulerAngles(2,1,0);
                             tf2::Quaternion qq;
                             qq.setRPY(0,0,vec[0]);
                             geometry_msgs::PoseStamped endpoint;
                             tf2::convert(qq,endpoint.pose.orientation);
-                            double yaw = tf2::getYaw(global_pose.pose.orientation);
-                            double bian = hypot(goal_pose.pose.position.x-global_pose.pose.position.x,goal_pose.pose.position.y-global_pose.pose.position.y);
+                            endpoint.pose.position.x=T1.translation()[0];
+                            endpoint.pose.position.y=T1.translation()[1];
+                            double yaw = tf2::getYaw(endpoint.pose.orientation);
+                            double bian = hypot(goal_pose.pose.position.x-endpoint.pose.position.x,goal_pose.pose.position.y-global_pose.pose.position.y);
                             double goal_th;
-                            if(goal_pose.pose.position.y-global_pose.pose.position.y<0){
-                                goal_th = -acos((goal_pose.pose.position.x-global_pose.pose.position.x)/bian);
+                            if(goal_pose.pose.position.y-endpoint.pose.position.y<0){
+                                goal_th = -acos((goal_pose.pose.position.x-endpoint.pose.position.x)/bian);
                             }else
-                                goal_th = acos((goal_pose.pose.position.x-global_pose.pose.position.x)/bian);
+                                goal_th = acos((goal_pose.pose.position.x-endpoint.pose.position.x)/bian);
+                            //the angle difference of endpoint yaw and the segment connecting the current pose and goal pose
                             angle[i*11+o]= fabs(angles::shortest_angular_distance(yaw, goal_th));
                             heading[i * 11 + o] = hypot(T1.translation()[0]-goal_x,T1.translation()[1]-goal_y);
-                            ROS_INFO("%d,%f",i * 11 + o,heading[i * 11 + o]);
-                            //ROS_INFO("%f", getGoalPositionDistance(current_pose_,goal_x,goal_y));
-                            //ROS_INFO("%f",fabs(getGoalPositionDistance(current_pose_,goal_x,goal_y)-heading[i * 11 + o]));
                         }
                         //every time frame move along the local frame, so right multiply
                         tmp = tmp * T;
@@ -514,42 +489,44 @@ namespace my_local_planner{
 
                         //Till now, we have got a point on a full trajectory. Next compute the distance between point and nearest obstacle.
                         //Here I choose to evaluate 8 points around.
-                        unsigned int Xcord = static_cast<int>((tmp.translation()[0] + costmap.getSizeInMetersX() / 2) /
-                                                              costmap.getResolution());
-                        unsigned int Ycord = static_cast<int>((tmp.translation()[1] + costmap.getSizeInMetersY() / 2) /
-                                                              costmap.getResolution());
-                        for (int u = 0; u + Xcord < costmap.getSizeInCellsX() && Xcord - u > 0 &&
-                                    u + Ycord < costmap.getSizeInCellsY() && Ycord - u > 0; u++) {
-                            unsigned int Xcordf = Xcord + u;
-                            unsigned int Xcordb = Xcord - u;
-                            unsigned int Ycordf = Ycord + u;
-                            unsigned int Ycordb = Ycord - u;
-                            Return returnd[8];
-                            returnd[0] = getObstacleDistance(Xcord, Ycordf, costmap);
-                            returnd[1] = getObstacleDistance(Xcord, Ycordb, costmap);
-                            returnd[2] = getObstacleDistance(Xcordf, Ycordf, costmap);
-                            returnd[3] = getObstacleDistance(Xcordf, Ycord, costmap);
-                            returnd[4] = getObstacleDistance(Xcordf, Ycordb, costmap);
-                            returnd[5] = getObstacleDistance(Xcordb, Ycordf, costmap);
-                            returnd[6] = getObstacleDistance(Xcordb, Ycord, costmap);
-                            returnd[7] = getObstacleDistance(Xcordb, Ycordb, costmap);
-                            for(int p=0; p<7; p++){
-                                if(returnd[p].exist){
-                                    dmin[i * 11 + o] = dmin[i * 11 + o] < returnd[p].d() ? dmin[i * 11 + o] : returnd[p].d();
-                                    if(dmin[i * 11 + o]<breakdistance[i*11+o]){
-                                        dmin[i * 11 + o]=-100;
-                                    }
-                                    break;
-                                }
-                                else if(p==6)
-                                    dmin[i * 11 + o] = costmap.getSizeInMetersX();
-                                else
-                                    continue;
-                            }
-                            //Now we get minimum obstacle distance dmin, next we compute heading
-
-                        }
+//                        unsigned int Xcord = static_cast<int>((tmp.translation()[0] + costmap.getSizeInMetersX() / 2) /
+//                                                              costmap.getResolution());
+//                        unsigned int Ycord = static_cast<int>((tmp.translation()[1] + costmap.getSizeInMetersY() / 2) /
+//                                                              costmap.getResolution());
+//                        for (int u = 0; u + Xcord < costmap.getSizeInCellsX() && Xcord - u > 0 &&
+//                                    u + Ycord < costmap.getSizeInCellsY() && Ycord - u > 0; u++) {
+//                            unsigned int Xcordf = Xcord + u;
+//                            unsigned int Xcordb = Xcord - u;
+//                            unsigned int Ycordf = Ycord + u;
+//                            unsigned int Ycordb = Ycord - u;
+//                            Return returnd[8];
+//                            returnd[0] = getObstacleDistance(Xcord, Ycordf, costmap);
+//                            returnd[1] = getObstacleDistance(Xcord, Ycordb, costmap);
+//                            returnd[2] = getObstacleDistance(Xcordf, Ycordf, costmap);
+//                            returnd[3] = getObstacleDistance(Xcordf, Ycord, costmap);
+//                            returnd[4] = getObstacleDistance(Xcordf, Ycordb, costmap);
+//                            returnd[5] = getObstacleDistance(Xcordb, Ycordf, costmap);
+//                            returnd[6] = getObstacleDistance(Xcordb, Ycord, costmap);
+//                            returnd[7] = getObstacleDistance(Xcordb, Ycordb, costmap);
+//                            for(int p=0; p<7; p++){
+//                                if(returnd[p].exist){
+//                                    dmin[i * 11 + o] = dmin[i * 11 + o] < returnd[p].d() ? dmin[i * 11 + o] : returnd[p].d();
+//                                    if(dmin[i * 11 + o]<breakdistance[i*11+o]){
+//                                        dmin[i * 11 + o]=-100;
+//                                    }
+//                                    break;
+//                                }
+//                                else if(p==6)
+//                                    dmin[i * 11 + o] = costmap.getSizeInMetersX();
+//                                else
+//                                    continue;
+//                            }
+//                            //Now we get minimum obstacle distance dmin, next we compute heading
+//
+//                        }
                     }
+                    //ROS_INFO("%d",min_dist);
+                    dmin[i*11+o]=min_dist;
                     /*ROS_INFO("%d,The least distance is %f",i * 11 + o,dmin[i * 11 + o]);*/}
             }
             std::vector<Cost> cost = costFunction(heading, dmin, window, angle, global_pose);
@@ -582,7 +559,7 @@ namespace my_local_planner{
 
         Return getObstacleDistance(unsigned int x, unsigned int y, const costmap_2d::Costmap2D& costmap){
             Return ret;
-            if(costmap.getCost(x, y)>130){
+            if(costmap.getCost(x, y)>90){
                 ret.rx=x*costmap.getResolution();
                 ret.ry=y*costmap.getResolution();
                 ret.cx=costmap.getSizeInMetersX();
@@ -604,9 +581,9 @@ namespace my_local_planner{
             //std::vector<geometry_msgs::PoseStamped>backup = window;
             //accumulate
             double alpha = 50;
-            double beta = 0.2;
+            double beta = 1;
             double gamma1 = 0.2;
-            double theta = 1;
+            double theta = 0;//1;
             double angleS = 0;
             double headingS=0;
             double dminS=0;
@@ -684,12 +661,12 @@ namespace my_local_planner{
             if(angle > (3.14/8)) {
                 cmd_vel.linear.x = 0.05;
                 cmd_vel.angular.z = 0.26;
-                ROS_INFO("rotating conterclockwise");
+                //ROS_INFO("rotating conterclockwise");
                 return true;
             }else if(angle < (-3.14/8)){
                 cmd_vel.linear.x = 0.05;
                 cmd_vel.angular.z = -0.26;
-                ROS_INFO("rotating clockwise");
+                //ROS_INFO("rotating clockwise");
                 return true;
             }else{
                 return false;
